@@ -15,17 +15,18 @@ jobs:
 
       - name: Instalar dependências e Tor
         run: |
-          # ytdlp + jq
           sudo curl -L https://github.com/yt-dlp/yt-dlp/releases/latest/download/yt-dlp -o /usr/local/bin/yt-dlp
           sudo chmod a+rx /usr/local/bin/yt-dlp
           sudo apt-get update && sudo apt-get install -y jq tor
 
       - name: Configurar Tor para saída no Brasil
         run: |
-          echo "ExitNodes {br}" | sudo tee /etc/tor/torrc.d/99-exitnodes
-          echo "StrictNodes 1"  | sudo tee -a /etc/tor/torrc.d/99-exitnodes
+          # Adiciona diretivas ao torrc principal
+          sudo bash -c 'echo "ExitNodes {br}" >> /etc/tor/torrc'
+          sudo bash -c 'echo "StrictNodes 1"  >> /etc/tor/torrc'
+          # Reinicia o Tor para aplicar configurações
           sudo service tor restart
-          # espera o Tor subir
+          # Aguarda o Tor subir
           sleep 10
 
       - name: Criar arquivo de cookies
