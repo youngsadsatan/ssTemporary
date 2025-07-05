@@ -13,79 +13,95 @@ jobs:
       - name: Checkout do código
         uses: actions/checkout@v4
 
-      - name: Instalar dependências
+      - name: Instalar dependências e Tor
         run: |
+          # ytdlp + jq
           sudo curl -L https://github.com/yt-dlp/yt-dlp/releases/latest/download/yt-dlp -o /usr/local/bin/yt-dlp
           sudo chmod a+rx /usr/local/bin/yt-dlp
-          sudo apt-get update && sudo apt-get install -y jq
+          sudo apt-get update && sudo apt-get install -y jq tor
 
-      - name: Criar arquivo de cookies a partir do Secret
+      - name: Configurar Tor para saída no Brasil
+        run: |
+          echo "ExitNodes {br}" | sudo tee /etc/tor/torrc.d/99-exitnodes
+          echo "StrictNodes 1"  | sudo tee -a /etc/tor/torrc.d/99-exitnodes
+          sudo service tor restart
+          # espera o Tor subir
+          sleep 10
+
+      - name: Criar arquivo de cookies
         run: echo "${{ secrets.YOUTUBE_COOKIES }}" > cookies.txt
 
-      - name: Gerar playlist.m3u
+      - name: Gerar playlist.m3u com Tor + proxies BR
         id: generate_playlist
         run: |
           echo "#EXTM3U" > playlist.m3u
           echo "## Playlist atualizada em: $(date)" >> playlist.m3u
 
-          # Lista de proxies BR (fallback)
-          PROXIES=(
+          # Primeiro tenta via Tor (socks5 local)
+          FALLBACK_PROXIES=(
             "45.226.83.146:4153"
             "168.205.217.205:4145"
             "45.229.172.157:4145"
             "177.125.37.181:4153"
           )
 
-          # JSON de canais
           CHANNELS_JSON='[
             {"category":"Noticias","name":"CNN Brasil","logo":"https://yt3.googleusercontent.com/ytc/AIdro_lmJE_9aX-lvy2eliMO5ejbko3mQVM6Ecf79AR8pQFMcV8=s250-c-k-c0x00ffffff-no-rj","live_url":"https://www.youtube.com/CNNbrasil/live"},
             {"category":"Futebol","name":"CazeTV","logo":"https://yt3.googleusercontent.com/6ZtRoT9LpJKkC9lne_BySbrnGfomGIf-_rfNsU5fHft8nYx8gCJiY9W2TH55Kc28K0VJovkAiw=s250-c-k-c0x00ffffff-no-rj","live_url":"https://www.youtube.com/CazeTV/live"},
             {"category":"Futebol","name":"CazeTV","live_url":"https://www.youtube.com/live/nqDEwQ8pHWs?si=FuqZxdZBbk0VesFC"}
           ]'
 
-          echo "$CHANNELS_JSON" | jq -c '. | sort_by(.category,.name) | .[]' | while IFS= read -r channel; do
-            CATEGORY=$(jq -r .category <<< "$channel")
-            NAME=$(jq -r .name     <<< "$channel")
-            LOGO=$(jq -r .logo     <<< "$channel")
-            LIVE_URL=$(jq -r .live_url <<< "$channel")
+          echo "$CHANNELS_JSON" | jq -c '. | sort_by(.category,.name) | .[]' | while read -r ch; do
+            NAME=$(jq -r .name     <<<"$ch")
+            CAT=$(jq -r .category <<<"$ch")
+            LOGO=$(jq -r .logo     <<<"$ch")
+            URL=$(jq -r .live_url  <<<"$ch")
 
             echo "Loading..."
             echo "Verificando: $NAME"
-            echo "--> URL da Live: $LIVE_URL"
+            echo "--> URL da Live: $URL"
 
-            FOUND_URL=""
-            for P in "${PROXIES[@]}"; do
-              echo "  Tentando proxy $P..."
-              URL=$(timeout 20 yt-dlp --cookies cookies.txt --proxy "socks4://$P" -f b --get-url "$LIVE_URL" 2>/dev/null | grep -m1 m3u8 || true)
-              if [ -n "$URL" ]; then
-                FOUND_URL=$URL
-                echo "    ➞ Sucesso com proxy $P"
-                break
-              fi
-            done
+            # 1) Tenta via Tor
+            M3U=$(timeout 20 yt-dlp --cookies cookies.txt \
+                     --proxy socks5://127.0.0.1:9050 \
+                     -f b --get-url "$URL" 2>/dev/null \
+                   | grep -m1 m3u8 || true)
 
-            if [ -n "$FOUND_URL" ]; then
+            # 2) Se falhar no Tor, tenta cada proxy BR
+            if [ -z "$M3U" ]; then
+              for P in "${FALLBACK_PROXIES[@]}"; do
+                echo "  Tentando proxy BR $P..."
+                M3U=$(timeout 20 yt-dlp --cookies cookies.txt \
+                         --proxy "socks4://$P" -f b --get-url "$URL" 2>/dev/null \
+                       | grep -m1 m3u8 || true)
+                [ -n "$M3U" ] && { echo "    ➞ Sucesso com $P"; break; }
+              done
+            else
+              echo "  ➞ Sucesso via Tor"
+            fi
+
+            if [ -n "$M3U" ]; then
               echo "  --> SUCESSO: $NAME online"
               echo "" >> playlist.m3u
-              echo "#EXTINF:-1 tvg-logo=\"$LOGO\" group-title=\"$CATEGORY\",$NAME" >> playlist.m3u
-              echo "$FOUND_URL" >> playlist.m3u
+              echo "#EXTINF:-1 tvg-logo=\"$LOGO\" group-title=\"$CAT\",$NAME" >> playlist.m3u
+              echo "$M3U" >> playlist.m3u
             else
-              echo "  --> FALHA: $NAME offline ou bloqueado (todos proxies falharam)"
+              echo "  --> FALHA: $NAME bloqueado/offline (Tor+proxies falharam)"
             fi
           done
 
           echo "..."
           echo "Verificação de todos os canais concluída."
 
-      - name: Fazer commit das alterações
+      - name: Fazer commit
         run: |
           git config user.name  "${{ github.actor }}"
           git config user.email "${{ github.actor_id }}+${{ github.actor }}@users.noreply.github.com"
           git add playlist.m3u
           if [ $(wc -l < playlist.m3u) -gt 2 ]; then
-            git commit -m "Atualiza a playlist de lives do YouTube"
+            git commit -m "Atualiza playlist de lives"
             git push
-            echo "Playlist atualizada com sucesso e enviada para o repositório."
+            echo "Playlist atualizada."
           else
-            echo "Nenhuma live foi encontrada. Nenhum commit será feito."
+            echo "Nenhuma live. Sem commit."
           fi
