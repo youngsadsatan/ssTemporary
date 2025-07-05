@@ -33,7 +33,7 @@ jobs:
           [
             {"category": "Noticias", "name": "CNN Brasil", "logo": "https://yt3.googleusercontent.com/ytc/AIdro_lmJE_9aX-lvy2eliMO5ejbko3mQVM6Ecf79AR8pQFMcV8=s250-c-k-c0x00ffffff-no-rj", "live_url": "https://www.youtube.com/CNNbrasil/live"},
             {"category": "Futebol", "name": "CazeTV", "logo": "https://yt3.googleusercontent.com/6ZtRoT9LpJKkC9lne_BySbrnGfomGIf-_rfNsU5fHft8nYx8gCJiY9W2TH55Kc28K0VJovkAiw=s250-c-k-c0x00ffffff-no-rj", "live_url": "https://www.youtube.com/CazeTV/live"},
-            {"category": "Filmes", "name": "Austin Powers", "live_url": "https://youtube.com/watch?v=SmbTHY5dscY&pp=0gcJCcEJAYcqIYzv"} 
+            {"category": "Futebol", "name": "CazeTV", "live_url": "https://youtube.com/watch?v=nqDEwQ8pHWs&pp=0gcJCcEJAYcqIYzv"} 
           ]
           '
 
