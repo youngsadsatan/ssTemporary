@@ -1,80 +1,76 @@
 name: YouTube
 
-on:
-  workflow_dispatch:
+on: workflow_dispatch:
 
-jobs:
-  build-playlist:
-    runs-on: ubuntu-latest
-    permissions:
-      contents: write
+jobs: build-playlist: runs-on: ubuntu-latest permissions: contents: write
 
-    steps:
-      - name: Checkout do código
-        uses: actions/checkout@v4
+steps:
+  - name: Checkout do código
+    uses: actions/checkout@v4
 
-      - name: Instalar dependências
-        run: |
-          sudo curl -L https://github.com/yt-dlp/yt-dlp/releases/latest/download/yt-dlp -o /usr/local/bin/yt-dlp
-          sudo chmod a+rx /usr/local/bin/yt-dlp
-          sudo apt-get update && sudo apt-get install -y jq
+  - name: Instalar dependências
+    run: |
+      sudo curl -L https://github.com/yt-dlp/yt-dlp/releases/latest/download/yt-dlp -o /usr/local/bin/yt-dlp
+      sudo chmod a+rx /usr/local/bin/yt-dlp
+      sudo apt-get update && sudo apt-get install -y jq
 
-      - name: Criar arquivo de cookies a partir do Secret
-        run: echo "${{ secrets.YOUTUBE_COOKIES }}" > cookies.txt
+  - name: Criar arquivo de cookies a partir do Secret
+    run: echo "${{ secrets.YOUTUBE_COOKIES }}" > cookies.txt
 
-      - name: Gerar playlist.m3u
-        id: generate_playlist
-        run: |
-          echo "#EXTM3U" > playlist.m3u
-          echo "## Playlist atualizada em: $(date)" >> playlist.m3u
+  - name: Gerar playlist.m3u
+    id: generate_playlist
+    run: |
+      echo "#EXTM3U" > playlist.m3u
+      echo "## Playlist atualizada em: $(date)" >> playlist.m3u
 
-          # Configura o proxy brasileiro com maior disponibilidade (99.74%)
-          PROXY="socks4://177.85.205.89:3629"
+      # Configura o proxy brasileiro com maior disponibilidade (99.74%)
+      PROXY="socks4://177.85.205.89:3629"
 
-          # ESTRUTURA DE DADOS CORRIGIDA: Usando 'live_url' em vez de 'handle'
-          CHANNELS_JSON=''
-          [
-            {"category": "Noticias", "name": "CNN Brasil", "logo": "https://yt3.googleusercontent.com/ytc/AIdro_lmJE_9aX-lvy2eliMO5ejbko3mQVM6Ecf79AR8pQFMcV8=s250-c-k-c0x00ffffff-no-rj", "live_url": "https://www.youtube.com/CNNbrasil/live"},
-            {"category": "Futebol", "name": "CazeTV", "logo": "https://yt3.googleusercontent.com/6ZtRoT9LpJKkC9lne_BySbrnGfomGIf-_rfNsU5fHft8nYx8gCJiY9W2TH55Kc28K0VJovkAiw=s250-c-k-c0x00ffffff-no-rj", "live_url": "https://www.youtube.com/CazeTV/live"},
-            {"category": "Futebol", "name": "CazeTV", "live_url": "https://www.youtube.com/live/nqDEwQ8pHWs?si=FuqZxdZBbk0VesFC"}
-          ]
-          ''
+      # ESTRUTURA DE DADOS: JSON multilinha usando heredoc para evitar problemas de citação
+      read -r -d '' CHANNELS_JSON << 'EOF'
+      [
+        {"category": "Noticias", "name": "CNN Brasil", "logo": "https://yt3.googleusercontent.com/ytc/AIdro_lmJE_9aX-lvy2eliMO5ejbko3mQVM6Ecf79AR8pQFMcV8=s250-c-k-c0x00ffffff-no-rj", "live_url": "https://www.youtube.com/CNNbrasil/live"},
+        {"category": "Futebol", "name": "CazeTV", "logo": "https://yt3.googleusercontent.com/6ZtRoT9LpJKkC9lne_BySbrnGfomGIf-_rfNsU5fHft8nYx8gCJiY9W2TH55Kc28K0VJovkAiw=s250-c-k-c0x00ffffff-no-rj", "live_url": "https://www.youtube.com/CazeTV/live"},
+        {"category": "Futebol", "name": "CazeTV", "live_url": "https://www.youtube.com/live/nqDEwQ8pHWs?si=FuqZxdZBbk0VesFC"}
+      ]
+      EOF
 
-          echo "$CHANNELS_JSON" | jq -c '. | sort_by(.category, .name) | .[]' | while IFS= read -r line; do
-            CATEGORY=$(echo "$line" | jq -r '.category')
-            NAME=$(echo "$line" | jq -r '.name')
-            LOGO=$(echo "$line" | jq -r '.logo')
-            LIVE_URL=$(echo "$line" | jq -r '.live_url')
+      echo "$CHANNELS_JSON" | jq -c '. | sort_by(.category, .name) | .[]' | while IFS= read -r line; do
+        CATEGORY=$(echo "$line" | jq -r '.category')
+        NAME=$(echo "$line" | jq -r '.name')
+        LOGO=$(echo "$line" | jq -r '.logo')
+        LIVE_URL=$(echo "$line" | jq -r '.live_url')
 
-            echo "Loading..."
-            echo "Verificando: $NAME"
-            echo "--> URL da Live: $LIVE_URL"
+        echo "Loading..."
+        echo "Verificando: $NAME"
+        echo "--> URL da Live: $LIVE_URL"
 
-            # Usa o proxy configurado para superar geoblocking
-            M3U8_URL=$((timeout 30 yt-dlp --cookies cookies.txt --proxy "$PROXY" -f b --get-url "$LIVE_URL" | grep 'm3u8' | head -n 1) || true)
-            
-            if [ -n "$M3U8_URL" ]; then
-              echo "  --> SUCESSO: Canal online. URL M3U8 encontrada."
-              echo "" >> playlist.m3u
-              echo "#EXTINF:-1 tvg-logo=\"$LOGO\" group-title=\"$CATEGORY\",$NAME" >> playlist.m3u
-              echo "$M3U8_URL" >> playlist.m3u
-            else
-              echo "  --> FALHA: Live não encontrada nesta URL específica. Pode estar offline ou bloqueada geograficamente."
-            fi
-          done
-          
-          echo "..."
-          echo "Verificação de todos os canais concluída."
+        # Usa o proxy configurado para superar geoblocking
+        M3U8_URL=$((timeout 30 yt-dlp --cookies cookies.txt --proxy "$PROXY" -f b --get-url "$LIVE_URL" | grep 'm3u8' | head -n 1) || true)
 
-      - name: Fazer commit das alterações
-        run: |
-          git config user.name "${{ github.actor }}"
-          git config user.email "${{ github.actor_id }}+${{ github.actor }}@users.noreply.github.com"
-          git add playlist.m3u
-          if [ $(wc -l < playlist.m3u) -gt 2 ]; then
-            git commit -m "Atualiza a playlist de lives do YouTube"
-            git push
-            echo "Playlist atualizada com sucesso e enviada para o repositório."
-          else
-            echo "Nenhuma live foi encontrada. Nenhum commit será feito."
-          fi
+        if [ -n "$M3U8_URL" ]; then
+          echo "  --> SUCESSO: Canal online. URL M3U8 encontrada."
+          echo "" >> playlist.m3u
+          echo "#EXTINF:-1 tvg-logo=\"$LOGO\" group-title=\"$CATEGORY\",$NAME" >> playlist.m3u
+          echo "$M3U8_URL" >> playlist.m3u
+        else
+          echo "  --> FALHA: Live não encontrada nesta URL específica. Pode estar offline ou bloqueada geograficamente."
+        fi
+      done
+
+      echo "..."
+      echo "Verificação de todos os canais concluída."
+
+  - name: Fazer commit das alterações
+    run: |
+      git config user.name "${{ github.actor }}"
+      git config user.email "${{ github.actor_id }}+${{ github.actor }}@users.noreply.github.com"
+      git add playlist.m3u
+      if [ $(wc -l < playlist.m3u) -gt 2 ]; then
+        git commit -m "Atualiza a playlist de lives do YouTube"
+        git push
+        echo "Playlist atualizada com sucesso e enviada para o repositório."
+      else
+        echo "Nenhuma live foi encontrada. Nenhum commit será feito."
+      fi
+
