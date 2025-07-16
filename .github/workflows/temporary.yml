@@ -62,18 +62,19 @@ jobs:
             echo "Verificando: $NAME"
             echo "--> URL da Live: $URL"
 
-            # 1) Tenta via Tor
+            # 1) Tenta via Tor (até 720p)
             M3U=$(timeout 20 yt-dlp --cookies cookies.txt \
                      --proxy socks5://127.0.0.1:9050 \
-                     -f b --get-url "$URL" 2>/dev/null \
+                     -f "best[height<=720]" --get-url "$URL" 2>/dev/null \
                    | grep -m1 m3u8 || true)
 
-            # 2) Se falhar no Tor, tenta cada proxy BR
+            # 2) Se falhar no Tor, tenta cada proxy BR (até 720p)
             if [ -z "$M3U" ]; then
               for P in "${FALLBACK_PROXIES[@]}"; do
                 echo "  Tentando proxy BR $P..."
                 M3U=$(timeout 20 yt-dlp --cookies cookies.txt \
-                         --proxy "socks4://$P" -f b --get-url "$URL" 2>/dev/null \
+                         --proxy "socks4://$P" \
+                         -f "best[height<=720]" --get-url "$URL" 2>/dev/null \
                        | grep -m1 m3u8 || true)
                 [ -n "$M3U" ] && { echo "    ➞ Sucesso com $P"; break; }
               done
