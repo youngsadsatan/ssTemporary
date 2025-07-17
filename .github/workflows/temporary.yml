@@ -21,12 +21,9 @@ jobs:
 
       - name: Configurar Tor para saída no Brasil
         run: |
-          # Adiciona diretivas ao torrc principal
           sudo bash -c 'echo "ExitNodes {br}" >> /etc/tor/torrc'
           sudo bash -c 'echo "StrictNodes 1"  >> /etc/tor/torrc'
-          # Reinicia o Tor para aplicar configurações
           sudo service tor restart
-          # Aguarda o Tor subir
           sleep 10
 
       - name: Criar arquivo de cookies
@@ -38,7 +35,6 @@ jobs:
           echo "#EXTM3U" > playlist.m3u
           echo "## Playlist atualizada em: $(date)" >> playlist.m3u
 
-          # Primeiro tenta via Tor (socks5 local)
           FALLBACK_PROXIES=(
             "45.226.83.146:4153"
             "168.205.217.205:4145"
@@ -46,20 +42,22 @@ jobs:
             "177.125.37.181:4153"
           )
 
-          CHANNELS_JSON='[
-            {"category":"Noticias","name":"CNN Brasil","logo":"https://yt3.googleusercontent.com/ytc/AIdro_lmJE_9aX-lvy2eliMO5ejbko3mQVM6Ecf79AR8pQFMcV8=s250-c-k-c0x00ffffff-no-rj","live_url":"https://www.youtube.com/CNNbrasil/live"},
-            {"category":"Futebol","name":"CazéTV","logo":"https://yt3.googleusercontent.com/6ZtRoT9LpJKkC9lne_BySbrnGfomGIf-_rfNsU5fHft8nYx8gCJiY9W2TH55Kc28K0VJovkAiw=s250-c-k-c0x00ffffff-no-rj","live_url":"https://www.youtube.com/live/h1JigS-tCbo?si=LYc9uRcyXW1FcD3m"},
-          ]'
+          CHANNELS_JSON=$(cat << 'EOF'
+[
+  {"category":"Noticias","name":"CNN Brasil","logo":"https://yt3.googleusercontent.com/ytc/AIdro_lmJE_9aX-lvy2eliMO5ejbko3mQVM6Ecf79AR8pQFMcV8=s250-c-k-c0x00ffffff-no-rj","live_url":"https://www.youtube.com/CNNbrasil/live"},
+  {"category":"Futebol","name":"CazeTV","logo":"https://yt3.googleusercontent.com/6ZtRoT9LpJKkC9lne_BySbrnGfomGIf-_rfNsU5fHft8nYx8gCJiY9W2TH55Kc28K0VJovkAiw=s250-c-k-c0x00ffffff-no-rj","live_url":"https://www.youtube.com/CazeTV/live"},
+  {"category":"Futebol","name":"CazeTV","live_url":"https://www.youtube.com/live/nqDEwQ8pHWs?si=FuqZxdZBbk0VesFC"}
+]
+EOF
+)
 
-          echo "$CHANNELS_JSON" | jq -c '. | sort_by(.category,.name) | .[]' | while read -r ch; do
+          echo "$CHANNELS_JSON" | jq -c '. | sort_by(.category, .name) | .[]' | while read -r ch; do
             NAME=$(jq -r .name     <<<"$ch")
             CAT=$(jq -r .category <<<"$ch")
             LOGO=$(jq -r .logo     <<<"$ch")
             URL=$(jq -r .live_url  <<<"$ch")
 
-            echo "Loading..."
-            echo "Verificando: $NAME"
-            echo "--> URL da Live: $URL"
+            echo "Verificando: $NAME → $URL"
 
             # 1) Tenta via Tor (até 720p)
             M3U=$(timeout 20 yt-dlp --cookies cookies.txt \
@@ -67,7 +65,7 @@ jobs:
                      -f "best[height<=720]" --get-url "$URL" 2>/dev/null \
                    | grep -m1 m3u8 || true)
 
-            # 2) Se falhar no Tor, tenta cada proxy BR (até 720p)
+            # 2) Se falhar, tenta proxies BR (até 720p)
             if [ -z "$M3U" ]; then
               for P in "${FALLBACK_PROXIES[@]}"; do
                 echo "  Tentando proxy BR $P..."
@@ -75,25 +73,22 @@ jobs:
                          --proxy "socks4://$P" \
                          -f "best[height<=720]" --get-url "$URL" 2>/dev/null \
                        | grep -m1 m3u8 || true)
-                [ -n "$M3U" ] && { echo "    ➞ Sucesso com $P"; break; }
+                [ -n "$M3U" ] && { echo "    Sucesso com $P"; break; }
               done
             else
-              echo "  ➞ Sucesso via Tor"
+              echo "  Sucesso via Tor"
             fi
 
             if [ -n "$M3U" ]; then
-              echo "  --> SUCESSO: $NAME online"
               echo "" >> playlist.m3u
               echo "#EXTINF:-1 tvg-logo=\"$LOGO\" group-title=\"$CAT\",$NAME" >> playlist.m3u
               echo "$M3U" >> playlist.m3u
             else
-              echo "  --> FALHA: $NAME bloqueado/offline (Tor+proxies falharam)"
+              echo "  Falha: $NAME offline ou bloqueado"
             fi
           done
 
-          echo "..."
-          echo "Verificação de todos os canais concluída."
-
+          echo "Verificação concluída."
       - name: Fazer commit
         run: |
           git config user.name  "${{ github.actor }}"
