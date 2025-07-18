@@ -19,28 +19,29 @@ jobs:
           sudo chmod a+rx /usr/local/bin/yt-dlp
           sudo apt-get update && sudo apt-get install -y jq tor curl
 
-      - name: Configurar Tor para saída no Brasil
+      - name: Configurar Tor para saída nos EUA
         run: |
-          echo "ExitNodes {br}" | sudo tee -a /etc/tor/torrc
+          echo "ExitNodes {us}" | sudo tee -a /etc/tor/torrc
           echo "StrictNodes 1"   | sudo tee -a /etc/tor/torrc
           sudo service tor restart
           sleep 10
 
-          echo "IP de saída via Tor:"
+          echo "IP de saída via Tor (deve ser US):"
           curl --socks5-hostname 127.0.0.1:9050 https://ifconfig.me || true
 
       - name: Criar arquivo de cookies
         run: echo "${{ secrets.YOUTUBE_COOKIES }}" > cookies.txt
 
-      - name: Gerar playlist.m3u com Tor + fallback proxies BR
+      - name: Gerar playlist.m3u com debug e proxies de fallback BR
         run: |
           echo "#EXTM3U" > playlist.m3u
           echo "## Playlist atualizada em: $(date)" >> playlist.m3u
 
+          # proxies selecionados (high anonymity / socks4 sempre que possível)
           FALLBACK_PROXIES=(
-            "socks5://45.236.215.111:54029"   # SOCKS5, High Anonymous, 3.9s
-            "http://18.228.42.104:3128"       # HTTP, High Anonymous, 0.5s
-            "https://18.228.191.229:3128"     # HTTPS, High Anonymous, 2.9s
+            "socks4://186.251.253.53:31337"  # 947ms, High Anonymous
+            "socks4://190.109.72.10:33633"   # 797ms, High Anonymous
+            "socks4://45.191.13.6:4153"      # 958ms, High Anonymous
           )
 
           CHANNELS_JSON='[
@@ -60,43 +61,49 @@ jobs:
               LOGO=$(jq -r .logo     <<<"$ch")
               URL=$(jq -r .live_url  <<<"$ch")
 
-              echo "Verificando: $NAME → $URL"
+              echo "=== Verificando: $NAME → $URL ==="
 
-              # 1) Tenta via Tor (resolvendo host via Tor)
+              # 1) Rotaciona circuito Tor e tenta via Tor com verbose
               sudo killall -HUP tor && sleep 3
-              M3U=$(timeout 20 yt-dlp --cookies cookies.txt \
-                       --proxy socks5h://127.0.0.1:9050 \
-                       -f "best[height<=720]" --get-url "$URL" 2>/dev/null \
-                     | grep -m1 m3u8 || true)
+              echo "Tentando via Tor (socks5h://127.0.0.1:9050) com --verbose:"
+              VERBOSE_OUTPUT=$(timeout 30 yt-dlp --cookies cookies.txt \
+                                --proxy socks5h://127.0.0.1:9050 \
+                                -f "best[height<=720]" --get-url --verbose "$URL" 2>&1)
+              M3U=$(printf "%s\n" "$VERBOSE_OUTPUT" | grep -m1 m3u8 || true)
+              echo "$VERBOSE_OUTPUT"
 
-              # 2) Se falhar, tenta proxies BR
+              # 2) Se falhar, tenta proxies de fallback BR
               if [ -z "$M3U" ]; then
                 for P in "${FALLBACK_PROXIES[@]}"; do
-                  echo "  Tentando proxy $P..."
-                  M3U=$(timeout 20 yt-dlp --cookies cookies.txt \
-                           --proxy "$P" \
-                           -f "best[height<=720]" --get-url "$URL" 2>/dev/null \
-                         | grep -m1 m3u8 || true)
+                  echo "Tentando proxy $P com --verbose:"
+                  PROXY_OUTPUT=$(timeout 30 yt-dlp --cookies cookies.txt \
+                                  --proxy "$P" \
+                                  -f "best[height<=720]" --get-url --verbose "$URL" 2>&1)
+                  M3U=$(printf "%s\n" "$PROXY_OUTPUT" | grep -m1 m3u8 || true)
+                  echo "$PROXY_OUTPUT"
                   if [ -n "$M3U" ]; then
-                    echo "    Sucesso com $P"
+                    echo "Sucesso com proxy $P"
                     break
+                  else
+                    echo "Falha com proxy $P"
                   fi
                 done
               else
-                echo "  Sucesso via Tor"
+                echo "Sucesso via Tor exit US"
               fi
 
+              # 3) Se obteve M3U, adiciona à playlist
               if [ -n "$M3U" ]; then
                 echo "" >> playlist.m3u
                 echo "#EXTINF:-1 tvg-logo=\"$LOGO\" group-title=\"$CAT\",$NAME" >> playlist.m3u
                 echo "$M3U" >> playlist.m3u
-                echo "  $NAME adicionado à playlist."
+                echo "$NAME adicionado à playlist."
               else
-                echo "  Falha: $NAME offline ou bloqueado"
+                echo "Falha geral: $NAME offline ou bloqueado em todas as rotas."
               fi
             done
 
-          echo "Verificação concluída."
+          echo "=== Verificação concluída ==="
 
       - name: Fazer commit
         run: |
@@ -104,9 +111,10 @@ jobs:
           git config user.email "${{ github.actor_id }}+${{ github.actor }}@users.noreply.github.com"
           git add playlist.m3u
           if [ $(wc -l < playlist.m3u) -gt 2 ]; then
-            git commit -m "Atualiza playlist de lives com fallback proxies BR"
+            git commit -m "Atualiza playlist de lives com debug e fallback proxies BR"
             git push
             echo "Playlist atualizada."
           else
-            echo "Nenhuma live. Sem commit."
+            echo "Nenhuma live ou todas falhas. Sem commit."
           fi
+```0
