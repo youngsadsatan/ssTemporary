@@ -15,7 +15,8 @@ jobs:
 
       - name: Instalar dependências e Tor
         run: |
-          sudo curl -L https://github.com/yt-dlp/yt-dlp/releases/latest/download/yt-dlp -o /usr/local/bin/yt-dlp
+          sudo curl -L https://github.com/yt-dlp/yt-dlp/releases/latest/download/yt-dlp \
+            -o /usr/local/bin/yt-dlp
           sudo chmod a+rx /usr/local/bin/yt-dlp
           sudo apt-get update && sudo apt-get install -y jq tor curl
 
@@ -25,15 +26,18 @@ jobs:
           echo "StrictNodes 1"   | sudo tee -a /etc/tor/torrc
           sudo service tor restart
           sleep 10
-
           echo "IP de saída via Tor (deve ser US):"
           curl --socks5-hostname 127.0.0.1:9050 https://ifconfig.me || true
 
       - name: Criar arquivo de cookies
-        run: echo "${{ secrets.YOUTUBE_COOKIES }}" > cookies.txt
-
-      - name: Gerar playlist.m3u com debug e proxies de fallback BR
         run: |
+          echo "${{ secrets.YOUTUBE_COOKIES }}" > cookies.txt
+
+      - name: Gerar playlist.m3u com tratamento de erros e proxies de fallback BR
+        run: |
+          # Não abortar no primeiro erro
+          set +e
+
           echo "#EXTM3U" > playlist.m3u
           echo "## Playlist atualizada em: $(date)" >> playlist.m3u
 
@@ -44,12 +48,13 @@ jobs:
             "socks4://45.191.13.6:4153"      # 958ms, High Anonymous
           )
 
+          # lista de canais (JSON limpo, sem colchetes markdown)
           CHANNELS_JSON='[
             {
-              "category":"Noticias",
-              "name":"CNN Brasil",
-              "logo":"https://yt3.googleusercontent.com/ytc/AIdro_lmJE_9aX-lvy2eliMO5ejbko3mQVM6Ecf79AR8pQFMcV8=s250-c-k-c0x00ffffff-no-rj",
-              "live_url":"https://www.youtube.com/CNNbrasil/live"
+              "category": "Noticias",
+              "name": "CNN Brasil",
+              "logo": "https://yt3.googleusercontent.com/ytc/AIdro_lmJE_9aX-lvy2eliMO5ejbko3mQVM6Ecf79AR8pQFMcV8=s250-c-k-c0x00ffffff-no-rj",
+              "live_url": "https://www.youtube.com/CNNbrasil/live"
             }
           ]'
 
@@ -63,36 +68,39 @@ jobs:
 
               echo "=== Verificando: $NAME → $URL ==="
 
-              # 1) Rotaciona circuito Tor e tenta via Tor com verbose
+              M3U=""
+
+              # 1) Rotaciona circuito Tor e tenta via Tor (SOCKS5)
               sudo killall -HUP tor && sleep 3
-              echo "Tentando via Tor (socks5h://127.0.0.1:9050) com --verbose:"
-              VERBOSE_OUTPUT=$(timeout 30 yt-dlp --cookies cookies.txt \
-                                --proxy socks5h://127.0.0.1:9050 \
-                                -f "best[height<=720]" --get-url --verbose "$URL" 2>&1)
-              M3U=$(printf "%s\n" "$VERBOSE_OUTPUT" | grep -m1 m3u8 || true)
-              echo "$VERBOSE_OUTPUT"
+              echo "Tentando via Tor (socks5://127.0.0.1:9050)..."
+              URL_M3U8=$(timeout 30 yt-dlp --cookies cookies.txt \
+                           --proxy "socks5://127.0.0.1:9050" \
+                           -f "best[height<=720]" -g "$URL" 2>/dev/null)
+              if [ $? -eq 0 ] && [[ "$URL_M3U8" == *".m3u8"* ]]; then
+                M3U="$URL_M3U8"
+                echo "Sucesso via Tor"
+              else
+                echo "Falha via Tor"
+              fi
 
               # 2) Se falhar, tenta proxies de fallback BR
               if [ -z "$M3U" ]; then
                 for P in "${FALLBACK_PROXIES[@]}"; do
-                  echo "Tentando proxy $P com --verbose:"
-                  PROXY_OUTPUT=$(timeout 30 yt-dlp --cookies cookies.txt \
-                                  --proxy "$P" \
-                                  -f "best[height<=720]" --get-url --verbose "$URL" 2>&1)
-                  M3U=$(printf "%s\n" "$PROXY_OUTPUT" | grep -m1 m3u8 || true)
-                  echo "$PROXY_OUTPUT"
-                  if [ -n "$M3U" ]; then
+                  echo "Tentando proxy $P..."
+                  URL_M3U8=$(timeout 30 yt-dlp --cookies cookies.txt \
+                               --proxy "$P" \
+                               -f "best[height<=720]" -g "$URL" 2>/dev/null)
+                  if [ $? -eq 0 ] && [[ "$URL_M3U8" == *".m3u8"* ]]; then
+                    M3U="$URL_M3U8"
                     echo "Sucesso com proxy $P"
                     break
                   else
                     echo "Falha com proxy $P"
                   fi
                 done
-              else
-                echo "Sucesso via Tor exit US"
               fi
 
-              # 3) Se obteve M3U, adiciona à playlist
+              # 3) Adiciona à playlist se obteve URL válida
               if [ -n "$M3U" ]; then
                 echo "" >> playlist.m3u
                 echo "#EXTINF:-1 tvg-logo=\"$LOGO\" group-title=\"$CAT\",$NAME" >> playlist.m3u
@@ -111,7 +119,7 @@ jobs:
           git config user.email "${{ github.actor_id }}+${{ github.actor }}@users.noreply.github.com"
           git add playlist.m3u
           if [ $(wc -l < playlist.m3u) -gt 2 ]; then
-            git commit -m "Atualiza playlist de lives com debug e fallback proxies BR"
+            git commit -m "Atualiza playlist de lives com fallback proxies BR"
             git push
             echo "Playlist atualizada."
           else
