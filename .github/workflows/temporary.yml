@@ -117,4 +117,3 @@ jobs:
           else
             echo "Nenhuma live ou todas falhas. Sem commit."
           fi
-```0
