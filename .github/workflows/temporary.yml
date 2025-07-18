@@ -17,35 +17,33 @@ jobs:
         run: |
           sudo curl -L https://github.com/yt-dlp/yt-dlp/releases/latest/download/yt-dlp -o /usr/local/bin/yt-dlp
           sudo chmod a+rx /usr/local/bin/yt-dlp
-          sudo apt-get update && sudo apt-get install -y jq tor
+          sudo apt-get update && sudo apt-get install -y jq tor curl
 
       - name: Configurar Tor para saída no Brasil
         run: |
-          sudo bash -c 'echo "ExitNodes {br}" >> /etc/tor/torrc'
-          sudo bash -c 'echo "StrictNodes 1"  >> /etc/tor/torrc'
+          echo "ExitNodes {br}" | sudo tee -a /etc/tor/torrc
+          echo "StrictNodes 1"   | sudo tee -a /etc/tor/torrc
           sudo service tor restart
           sleep 10
+
+          echo "Verificando IP de saída via Tor:"
+          curl --socks5-hostname 127.0.0.1:9050 https://ifconfig.me || true
 
       - name: Criar arquivo de cookies
         run: echo "${{ secrets.YOUTUBE_COOKIES }}" > cookies.txt
 
-      - name: Gerar playlist.m3u com Tor + proxies BR
-        id: generate_playlist
+      - name: Gerar playlist.m3u com Tor
         run: |
           echo "#EXTM3U" > playlist.m3u
           echo "## Playlist atualizada em: $(date)" >> playlist.m3u
 
-          FALLBACK_PROXIES=(
-            "45.226.83.146:4153"
-            "168.205.217.205:4145"
-            "45.229.172.157:4145"
-            "177.125.37.181:4153"
-          )
-
           CHANNELS_JSON='[
-            {"category":"Noticias","name":"CNN Brasil","logo":"https://yt3.googleusercontent.com/ytc/AIdro_lmJE_9aX-lvy2eliMO5ejbko3mQVM6Ecf79AR8pQFMcV8=s250-c-k-c0x00ffffff-no-rj","live_url":"https://www.youtube.com/CNNbrasil/live"},
-            {"category":"Futebol","name":"CazeTV","logo":"https://yt3.googleusercontent.com/6ZtRoT9LpJKkC9lne_BySbrnGfomGIf-_rfNsU5fHft8nYx8gCJiY9W2TH55Kc28K0VJovkAiw=s250-c-k-c0x00ffffff-no-rj","live_url":"https://www.youtube.com/CazeTV/live"},
-            {"category":"Futebol","name":"CazeTV","live_url":"https://www.youtube.com/live/nqDEwQ8pHWs?si=FuqZxdZBbk0VesFC"}
+            {
+              "category":"Noticias",
+              "name":"CNN Brasil",
+              "logo":"https://yt3.googleusercontent.com/ytc/AIdro_lmJE_9aX-lvy2eliMO5ejbko3mQVM6Ecf79AR8pQFMcV8=s250-c-k-c0x00ffffff-no-rj",
+              "live_url":"https://www.youtube.com/CNNbrasil/live"
+            }
           ]'
 
           echo "$CHANNELS_JSON" \
@@ -58,32 +56,23 @@ jobs:
 
               echo "Verificando: $NAME → $URL"
 
-              # 1) Tenta via Tor (até 720p)
+              # Rotaciona circuito Tor
+              sudo killall -HUP tor
+              sleep 3
+
+              # Tenta via Tor (resolvendo host via Tor)
               M3U=$(timeout 20 yt-dlp --cookies cookies.txt \
-                       --proxy socks5://127.0.0.1:9050 \
+                       --proxy socks5h://127.0.0.1:9050 \
                        -f "best[height<=720]" --get-url "$URL" 2>/dev/null \
                      | grep -m1 m3u8 || true)
-
-              # 2) Se falhar, tenta proxies BR (até 720p)
-              if [ -z "$M3U" ]; then
-                for P in "${FALLBACK_PROXIES[@]}"; do
-                  echo "  Tentando proxy BR $P..."
-                  M3U=$(timeout 20 yt-dlp --cookies cookies.txt \
-                           --proxy "socks4://$P" \
-                           -f "best[height<=720]" --get-url "$URL" 2>/dev/null \
-                         | grep -m1 m3u8 || true)
-                  [ -n "$M3U" ] && { echo "    Sucesso com $P"; break; }
-                done
-              else
-                echo "  Sucesso via Tor"
-              fi
 
               if [ -n "$M3U" ]; then
                 echo "" >> playlist.m3u
                 echo "#EXTINF:-1 tvg-logo=\"$LOGO\" group-title=\"$CAT\",$NAME" >> playlist.m3u
                 echo "$M3U" >> playlist.m3u
+                echo "  Sucesso: $NAME adicionado."
               else
-                echo "  Falha: $NAME offline ou bloqueado"
+                echo "  Falha: $NAME offline ou bloqueado via Tor"
               fi
             done
 
@@ -95,7 +84,7 @@ jobs:
           git config user.email "${{ github.actor_id }}+${{ github.actor }}@users.noreply.github.com"
           git add playlist.m3u
           if [ $(wc -l < playlist.m3u) -gt 2 ]; then
-            git commit -m "Atualiza playlist de lives"
+            git commit -m "Atualiza playlist de lives via Tor"
             git push
             echo "Playlist atualizada."
           else
